@@ -1,0 +1,387 @@
+login to AWS Console
+Lanuch a server ubuntu 20.04 & t2.large 
+Instace_name -> Prometheus_Server
+with secrity group inbound rule_files
+ - ssh is default 
+ - prometheus port 9090
+ - node_exporter port 9100
+ - grafana port 3000.
+
+#Prometheus Installation On Prometheus_Server.
+#https://github.com/prometheus
+
+sudo useradd --no-create-home --shell /bin/false prometheus
+sudo mkdir /etc/prometheus
+sudo mkdir /var/lib/prometheus
+sudo chown -R prometheus:prometheus /var/lib/prometheus
+wget https://github.com/prometheus/prometheus/releases/download/v2.45.0/prometheus-2.45.0.linux-amd64.tar.gz -P /tmp
+cd /tmp
+tar xvf /tmp/prometheus-2.45.0.linux-amd64.tar.gz
+
+#copying prometheus & promtool to bin directory
+sudo cp /tmp/prometheus-2.45.0.linux-amd64/prometheus /usr/local/bin/
+sudo cp /tmp/prometheus-2.45.0.linux-amd64/promtool /usr/local/bin/
+
+#taking ownership directory
+sudo chown prometheus:prometheus /usr/local/bin/prometheus
+sudo chown prometheus:prometheus /usr/local/bin/promtool
+
+#copying consoles and console_libraries to prometheus directory
+sudo cp -r /tmp/prometheus-2.45.0.linux-amd64/consoles /etc/prometheus
+sudo cp -r /tmp/prometheus-2.45.0.linux-amd64/console_libraries /etc/prometheus
+
+#taking ownership directorys
+sudo chown -R prometheus:prometheus  /etc/prometheus/consoles
+sudo chown -R prometheus:prometheus  /etc/prometheus/console_libraries
+
+#verifing prometheus & promtool 
+ls -ltr /usr/local/bin/ | grep prom
+
+
+#Adding server configuration detials
+
+sudo nano /etc/prometheus/prometheus.yml
+
+global:
+  scrape_interval: 15s
+scrape_configs:
+  - job_name: 'prometheus_private'
+    scrape_interval: 5s
+    static_configs:
+    - targets: ['localhost:9090']
+  - job_name: 'prometheus_public'
+    scrape_interval: 5s
+    static_configs:
+    - targets: ['< Public_Ip/Public_DNS >:9090']
+
+
+#Adding systemd service for prometheus
+
+sudo nano /etc/systemd/system/prometheus.service
+
+[Unit]
+Description=Prometheus
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+User=prometheus
+Group=prometheus
+Type=simple
+ExecStart=/usr/local/bin/prometheus \
+    --config.file=/etc/prometheus/prometheus.yml \
+    --storage.tsdb.path=/var/lib/prometheus/ \
+    --web.console.templates=/etc/prometheus/consoles \
+    --web.console.libraries=/etc/prometheus/console_libraries \
+    --web.enable-lifecycle \
+    --web.enable-admin-api \
+    --log.level=info
+
+[Install]
+WantedBy=multi-user.target
+
+
+#Start & Check Prometheus Status
+sudo systemctl daemon-reload
+sudo systemctl start prometheus
+sudo systemctl enable prometheus
+sudo systemctl status prometheus
+
+#browse http://<< Public_Ip/Public_DNS >>:9090
+
+#we get only on prometheus_server related metrics.
+#we have to collect server level metrics using node_exporter.
+#we get all server side metrics.
+
+
+#Installing & Configuring Node Exporter On Prometheus_Server
+
+sudo useradd --no-create-home --shell /bin/false node_exporter
+wget https://github.com/prometheus/node_exporter/releases/download/v1.6.1/node_exporter-1.6.1.linux-amd64.tar.gz -P /tmp
+cd /tmp
+tar xvf node_exporter-1.6.1.linux-amd64.tar.gz
+sudo cp /tmp/node_exporter-1.6.1.linux-amd64/node_exporter /usr/local/bin/
+sudo chown node_exporter:node_exporter /usr/local/bin/node_exporter
+
+
+#Adding systemd node_exporter service
+
+sudo nano /lib/systemd/system/node_exporter.service
+
+[Unit]
+Description=Node Exporter
+After=network.target
+
+[Service]
+User=node_exporter
+Group=node_exporter
+Type=simple
+ExecStart=/usr/local/bin/node_exporter
+
+[Install]
+WantedBy=multi-user.target
+
+#we have to update sudo nano /etc/prometheus/prometheus.yml
+#add to node_exporter server configuration
+
+  - job_name: 'node_exporter'
+    scrape_interval: 5s
+    static_configs:
+    - targets: ['<< Public_Ip/Public_DNS >>:9100']
+
+
+#Start & check node_exporter status
+sudo systemctl daemon-reload
+sudo systemctl start node_exporter
+sudo systemctl restart node_exporter
+sudo systemctl enable node_exporter
+sudo systemctl status node_exporter
+
+#Reload Prometheus Config Without Restarting Prometheus:
+curl -s -XPOST localhost:9090/-/reload
+
+#check node_exporter metrics are shown or not in prometheus.
+#we collected data from servers metrics.
+#we can visuvaliser using Grafana Dashboard.
+#intsall and configuration of Grafana.
+
+#Launch 2 more instance for more visualization purpose.
+#ubuntu 20.04 - t2..micro - instances &&
+#install node_exporter on both instaces(web-server-1 & web-server-2) and start the node_exporter service.
+
+#then update server configurations On Prometheus_Server /etc/prometheus/prometheus.yaml.
+  - job_name: 'web-servers'
+    scrape_interval: 5s
+    static_configs:
+    - targets: ['< Public_Ip/Public_DNS >:9100','< Public_Ip/Public_DNS >:9100']
+
+#Then curl -s -XPOST localhost:9090/-/reload
+
+Grafana Installation & Configuration On Prometheus_Server
+
+#https://computingforgeeks.com/how-to-install-grafana-on-ubuntu-linux-2/
+
+sudo apt-get update
+
+sudo apt-get install -y gnupg2 curl software-properties-common
+
+curl https://packages.grafana.com/gpg.key | sudo apt-key add -
+
+sudo add-apt-repository "deb https://packages.grafana.com/oss/deb stable main"
+
+#You might get public key error when you perform above command. We can resolve this by running below comamnd with the key given in the error.
+#sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 8C8C34C524098CB6
+#sudo add-apt-repository "deb https://packages.grafana.com/oss/deb stable main"
+
+sudo apt-get update
+
+sudo apt-get -y install grafana
+
+sudo systemctl enable --now grafana-server
+
+sudo /bin/systemctl start grafana-server
+
+
+#Access Grafana Dashboard on http://<Public_Ip/Public_DNS>:3000  
+#Username & Password : admin/admin
+#Add DATA SOURCE prometheus
+#ADD prometheus server URL & save it.
+#GOTO Dashboard import below Dashboard 10180.
+#Linux Hosts Metrics | Base
+#https://grafana.com/grafana/dashboards/10180 .
+
+
+
+Installing & Configuring Alertmanager On Prometheus_Server
+
+#https://www.openlogic.com/blog/configuring-grafana-and-prometheus-alertmanager
+#https://www.robustperception.io/sending-email-with-the-alertmanager-via-gmail/
+#https://linuxhint.com/install-configure-prometheus-alert-manager-ubuntu/ - VERY GOOD 
+#Good Alerts: https://awesome-prometheus-alerts.grep.to/rules.html
+
+
+wget https://github.com/prometheus/alertmanager/releases/download/v0.25.0/alertmanager-0.25.0.linux-amd64.tar.gz -P /tmp 
+cd /tmp
+tar -xvzf alertmanager-0.25.0.linux-amd64.tar.gz
+sudo mv alertmanager-0.25.0.linux-amd64/alertmanager /usr/local/bin/
+
+
+sudo mkdir /etc/alertmanager/
+sudo chown prometheus:prometheus /etc/alertmanager/
+
+#Create a new gmail app password which is needed in the next steps.
+  - Go to gmail 
+  - manage your google account 
+  - security 
+  - 2-step verification
+  - app password
+  - generate a password
+  - copy password and insert below auth_password
+
+#We need to create alertmanager config file with name alertmanager.yml:
+
+sudo nano /etc/alertmanager/alertmanager.yml
+route:
+  # Receiver name for notification
+  receiver: 'gmail'
+  # grouping definition
+  group_by: ['alertname', 'Service', 'Stage', 'Role']
+  group_wait:  	30s
+  group_interval:  1m
+  repeat_interval: 1m
+
+receivers:
+# any name of Receiver
+- name: 'gmail'
+  email_configs:
+  - to: 'yourgemailaccount@gmail.com'
+	from: 'yourgemailaccount@gmail.com'
+	smarthost: smtp.gmail.com:587
+	auth_username: 'yourgemailaccount@gmail.com'
+	auth_identity: 'yourgemailaccount@gmail.com'
+	auth_password: 'app password'
+
+#Create a file /etc/prometheus/alert_rules.yml
+#set of rule for alerting
+
+sudo nano /etc/prometheus/alert_rules.yml
+
+groups:
+ - name: web-servers
+   rules:
+   - alert: InstanceDown
+     expr: up == 0
+     for: 1m
+     labels:
+       severity: critical
+   - alert: Host Memory Less Than 50 Percent
+     expr: node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes * 100 < 50
+     for: 1m
+     labels:
+       severity: critical
+   - alert: HostHighCpuLoad
+     expr: 100 - (avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[2m])) * 100) > 50
+     for: 0m
+     labels:
+       severity: warning
+     annotations:
+       summary: Host high CPU load (instance {{ $labels.instance }})
+       description: "CPU load is > 50%\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+   - alert: HostOutOfDiskSpace
+     expr: (node_filesystem_avail_bytes * 100) / node_filesystem_size_bytes < 40 and ON (instance, device, mountpoint) node_filesystem_readonly == 0
+     for: 1m
+     labels:
+       severity: warning
+     annotations:
+       summary: Host out of disk space (instance {{ $labels.instance }})
+       description: "Disk is almost full (< 40% left)\n  VALUE = {{ $value }}\n  LABELS = {{ $labels }}"
+
+
+#Update /etc/prometheus/prometheus.yml file with the alertmanager configurations.
+#add these 2 in prometheus.yml 
+
+sudo nano /etc/prometheus/prometheus.yml
+
+alerting:
+  alertmanagers:
+  - static_configs:
+    - targets: ['<<alertmanager-public-ip>>:9093']
+
+rule_files:
+- alert_rules.yml
+
+###########################################################################################
+
+global:
+  scrape_interval: 15s
+alerting:
+  alertmanagers:
+  - static_configs:
+    - targets: ['ec2-184-72-101-139.compute-1.amazonaws.com:9093']
+ 
+rule_files:
+- alert_rules.yml
+
+scrape_configs:
+  - job_name: 'prometheus_private'
+    scrape_interval: 5s
+    static_configs:
+    - targets: ['localhost:9090']
+  - job_name: 'prometheus_public'
+    scrape_interval: 5s
+    static_configs:
+    - targets: ['ec2-184-72-101-139.compute-1.amazonaws.com:9090']
+  - job_name: 'node_exporter'
+    scrape_interval: 5s
+    static_configs:
+    - targets: ['ec2-184-72-101-139.compute-1.amazonaws.com:9100']
+  - job_name: 'web-servers'
+    scrape_interval: 5s
+    static_configs:
+    - targets: ['ec2-54-204-105-144.compute-1.amazonaws.com:9100','ec2-54-175-185-88.compute-1.amazonaws.com:9100']
+
+#########################################################################################
+
+#Create alertmanager systemd service On Prometheus_Server
+sudo nano /etc/systemd/system/alertmanager.service
+
+[Unit]
+Description=Alertmanager for prometheus
+
+[Service]
+Restart=always
+User=prometheus
+ExecStart=/usr/local/bin/alertmanager --config.file=/etc/alertmanager/alertmanager.yml --storage.path=/etc/alertmanager/       	 
+ExecReload=/bin/kill -HUP $MAINPID
+TimeoutStopSec=20s
+SendSIGKILL=no
+
+[Install]
+WantedBy=multi-user.target
+
+#reload prometheus.yaml file using command
+ curl -s -XPOST localhost:9090/-/reload
+
+#Start & check alertmanager service status
+sudo systemctl daemon-reload
+sudo systemctl start alertmanager.service
+sudo systemctl enable alertmanager.service
+sudo systemctl status alertmanager.service
+
+#If you want restart service:
+sudo systemctl restart alertmanager.service
+sudo systemctl status alertmanager.service
+ 
+#Goto prometheus server webpage check alerts.
+#Also Grafana Dashboard there alerting -> alerting rules.
+#Search by data sources -> prometheus.
+
+#Goto web-server(1&2) test Monitoring and alertmanager.
+
+#1.HostHighCpuLoad 
+ - sudo apt update
+ - sudo apt install stress
+ - stress --cpu 8 --io 4 --vm 2 --vm-bytes 128M --timeout 5m &
+ - we get an alerting email HostHighCpuLoad.
+
+
+#2.HostOutOfDiskSpace 
+  - download a file and copy it more file using for loop.
+  - example:-> wget https://releases.hashicorp.com/terraform/1.5.3/terraform_1.5.3_linux_amd64.zip
+  -  mv terraform_1.5.3_linux_amd64.zip terraform_1.zip
+  - for I in {1..150}; do cp terraform_1.zip terraform_1_$I.zip ; sleep 1 ; done
+  - we get an alerting email HostOutOfDiskSpace.
+  - after alerting clean up thing using command 
+  - rm -rf terraform_1*
+
+#3.Host Memory Less Than 50 Percent 
+ - using stress we achieve Host Memory Less Than 50 Percent
+ - stress --cpu 8 --io 4 --vm 2 --vm-bytes 256M --timeout 5m &
+ - using this command we get an alert for these 3 alerts.
+ - HostHighCpuLoad, HostOutOfDiskSpace, Host Memory Less Than 50 Percent
+
+#4.InstanceDown
+ - we can achieve stop or terminate instace(web-servers).
+ - we get an alerting mail.
+
+#Thank You Done The Monitoring Project .
